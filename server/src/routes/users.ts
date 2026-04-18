@@ -2,7 +2,7 @@ import { Router } from "express";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/index.js";
-import { users, userLibrary, wishlistItems, reviews } from "../db/schema.js";
+import { users, games, userLibrary, wishlistItems, reviews } from "../db/schema.js";
 import { requireAuth } from "../middleware/auth.js";
 import type { AuthRequest } from "../types/index.js";
 
@@ -38,7 +38,17 @@ router.get("/wishlist", async (req: AuthRequest, res, next) => {
 
 router.post("/wishlist/:gameId", async (req: AuthRequest, res, next) => {
   try {
-    const { gameId } = req.params;
+    const gameId = req.params.gameId as string;
+
+    const game = await db.query.games.findFirst({
+      where: and(eq(games.id, gameId), eq(games.isActive, true)),
+      columns: { id: true },
+    });
+    if (!game) {
+      res.status(404).json({ error: "Game not found" });
+      return;
+    }
+
     const existing = await db.query.wishlistItems.findFirst({
       where: and(eq(wishlistItems.userId, req.user!.userId), eq(wishlistItems.gameId, gameId)),
     });
@@ -55,11 +65,18 @@ router.post("/wishlist/:gameId", async (req: AuthRequest, res, next) => {
 
 router.delete("/wishlist/:gameId", async (req: AuthRequest, res, next) => {
   try {
-    await db
+    const gameId = req.params.gameId as string;
+    const deleted = await db
       .delete(wishlistItems)
       .where(
-        and(eq(wishlistItems.userId, req.user!.userId), eq(wishlistItems.gameId, req.params.gameId))
-      );
+        and(eq(wishlistItems.userId, req.user!.userId), eq(wishlistItems.gameId, gameId))
+      )
+      .returning({ id: wishlistItems.gameId });
+
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "Game not in wishlist" });
+      return;
+    }
     res.json({ message: "Removed from wishlist" });
   } catch (err) {
     next(err);
@@ -94,8 +111,17 @@ const reviewSchema = z.object({
 
 router.post("/reviews/:gameId", async (req: AuthRequest, res, next) => {
   try {
-    const { gameId } = req.params;
+    const gameId = req.params.gameId as string;
     const { isRecommended, content } = reviewSchema.parse(req.body);
+
+    const game = await db.query.games.findFirst({
+      where: eq(games.id, gameId),
+      columns: { id: true },
+    });
+    if (!game) {
+      res.status(404).json({ error: "Game not found" });
+      return;
+    }
 
     const owned = await db.query.userLibrary.findFirst({
       where: and(eq(userLibrary.userId, req.user!.userId), eq(userLibrary.gameId, gameId)),

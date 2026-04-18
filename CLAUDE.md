@@ -33,6 +33,8 @@ This project runs in **WSL2** (Ubuntu). The Windows `npm` is on PATH but does no
 - Check: `which npm` — if it points to `/mnt/c/...`, use `npm` via the Linux Node.js install (e.g. install via `nvm` or `apt`)
 - Preferred: use `nvm` to manage Node.js within WSL
 
+**Note:** WSL2 has a local PostgreSQL running on port 5432. Docker's PostgreSQL is mapped to **port 5433** to avoid conflicts. The `DATABASE_URL` uses `localhost:5433`.
+
 ## Setup Commands
 
 ```bash

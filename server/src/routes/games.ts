@@ -108,8 +108,9 @@ router.get("/featured", async (_req, res, next) => {
 
 router.get("/:slug", async (req, res, next) => {
   try {
+    const slug = req.params.slug as string;
     const game = await db.query.games.findFirst({
-      where: eq(games.slug, req.params.slug),
+      where: eq(games.slug, slug),
     });
 
     if (!game) {
@@ -135,8 +136,9 @@ router.get("/:slug", async (req, res, next) => {
 
 router.get("/:slug/ownership", requireAuth, async (req: AuthRequest, res, next) => {
   try {
+    const slug = req.params.slug as string;
     const game = await db.query.games.findFirst({
-      where: eq(games.slug, req.params.slug),
+      where: eq(games.slug, slug),
       columns: { id: true },
     });
 

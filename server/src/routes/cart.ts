@@ -23,7 +23,7 @@ router.get("/", async (req: AuthRequest, res, next) => {
 
 router.post("/:gameId", async (req: AuthRequest, res, next) => {
   try {
-    const { gameId } = req.params;
+    const gameId = req.params.gameId as string;
 
     const game = await db.query.games.findFirst({
       where: and(eq(games.id, gameId), eq(games.isActive, true)),
@@ -58,9 +58,16 @@ router.post("/:gameId", async (req: AuthRequest, res, next) => {
 
 router.delete("/:gameId", async (req: AuthRequest, res, next) => {
   try {
-    await db
+    const gameId = req.params.gameId as string;
+    const deleted = await db
       .delete(cartItems)
-      .where(and(eq(cartItems.userId, req.user!.userId), eq(cartItems.gameId, req.params.gameId)));
+      .where(and(eq(cartItems.userId, req.user!.userId), eq(cartItems.gameId, gameId)))
+      .returning({ id: cartItems.gameId });
+
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "Game not in cart" });
+      return;
+    }
     res.json({ message: "Removed from cart" });
   } catch (err) {
     next(err);
