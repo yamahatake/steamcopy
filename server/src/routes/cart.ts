@@ -21,6 +21,53 @@ router.get("/", async (req: AuthRequest, res, next) => {
   }
 });
 
+router.post("/checkout", async (req: AuthRequest, res, next) => {
+  try {
+    const userId = req.user!.userId;
+
+    const items = await db.query.cartItems.findMany({
+      where: eq(cartItems.userId, userId),
+      with: { game: true },
+    });
+
+    if (items.length === 0) {
+      res.status(400).json({ error: "Cart is empty" });
+      return;
+    }
+
+    const total = items.reduce((sum, item) => sum + parseFloat(item.game.price), 0);
+
+    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!user) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const balance = parseFloat(user.balance as string);
+    if (balance < total) {
+      res.status(402).json({ error: "Insufficient balance" });
+      return;
+    }
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(users)
+        .set({ balance: (balance - total).toFixed(2) })
+        .where(eq(users.id, userId));
+
+      await tx.insert(userLibrary).values(
+        items.map((item) => ({ userId, gameId: item.gameId }))
+      );
+
+      await tx.delete(cartItems).where(eq(cartItems.userId, userId));
+    });
+
+    res.json({ message: "Purchase successful", itemCount: items.length, total });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post("/:gameId", async (req: AuthRequest, res, next) => {
   try {
     const gameId = req.params.gameId as string;
@@ -69,53 +116,6 @@ router.delete("/:gameId", async (req: AuthRequest, res, next) => {
       return;
     }
     res.json({ message: "Removed from cart" });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post("/checkout", async (req: AuthRequest, res, next) => {
-  try {
-    const userId = req.user!.userId;
-
-    const items = await db.query.cartItems.findMany({
-      where: eq(cartItems.userId, userId),
-      with: { game: true },
-    });
-
-    if (items.length === 0) {
-      res.status(400).json({ error: "Cart is empty" });
-      return;
-    }
-
-    const total = items.reduce((sum, item) => sum + parseFloat(item.game.price), 0);
-
-    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-
-    const balance = parseFloat(user.balance as string);
-    if (balance < total) {
-      res.status(402).json({ error: "Insufficient balance" });
-      return;
-    }
-
-    await db.transaction(async (tx) => {
-      await tx
-        .update(users)
-        .set({ balance: (balance - total).toFixed(2) })
-        .where(eq(users.id, userId));
-
-      await tx.insert(userLibrary).values(
-        items.map((item) => ({ userId, gameId: item.gameId }))
-      );
-
-      await tx.delete(cartItems).where(eq(cartItems.userId, userId));
-    });
-
-    res.json({ message: "Purchase successful", itemCount: items.length, total });
   } catch (err) {
     next(err);
   }

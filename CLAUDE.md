@@ -6,82 +6,88 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SteamClone is a full-stack Steam-like game store. React + TypeScript + Tailwind frontend, Node.js + Express + TypeScript backend, PostgreSQL database via Drizzle ORM.
 
-## Monorepo Structure
-
-```
-SteamClone/
-├── client/                    # React + Vite + TypeScript + Tailwind CSS v4
-│   └── src/
-│       ├── api/               # Axios API clients (auth, games, cart)
-│       ├── components/        # Layout + GameCard
-│       ├── pages/             # Home, Store, GameDetail, Library, Cart, Login, Register
-│       ├── stores/            # Zustand stores (authStore, cartStore)
-│       └── router.tsx         # React Router v7 routes
-├── server/                    # Express + TypeScript + Drizzle ORM
-│   └── src/
-│       ├── db/                # Drizzle schema, connection, seed
-│       ├── middleware/        # JWT auth, error handler
-│       ├── routes/            # auth, games, cart, users
-│       └── index.ts           # Server entry point
-└── docker-compose.yml         # PostgreSQL 16 + pgAdmin
-```
-
 ## Environment
 
-This project runs in **WSL2** (Ubuntu). The Windows `npm` is on PATH but does not work for this WSL path. Always use the Linux npm/npx:
+This project runs in **WSL2** (Ubuntu). The Windows `npm` is on PATH but does not work for this WSL path. Always use the Linux npm via `nvm`.
 
-- Check: `which npm` — if it points to `/mnt/c/...`, use `npm` via the Linux Node.js install (e.g. install via `nvm` or `apt`)
-- Preferred: use `nvm` to manage Node.js within WSL
+**Note:** WSL2 has a local PostgreSQL on port 5432. Docker's PostgreSQL is mapped to **port 5433** to avoid conflicts. The `DATABASE_URL` uses `localhost:5433`.
 
-**Note:** WSL2 has a local PostgreSQL running on port 5432. Docker's PostgreSQL is mapped to **port 5433** to avoid conflicts. The `DATABASE_URL` uses `localhost:5433`.
+## Commands
 
-## Setup Commands
+### Server (`cd server`)
 
 ```bash
-# 1. Start PostgreSQL
-docker-compose up -d
+npm run dev          # tsx watch — hot reload via tsx
+npm run build        # tsc compile to dist/
+npm run start        # run compiled dist/index.js
 
-# 2. Install dependencies
-cd client && npm install
-cd ../server && npm install
-
-# 3. Configure environment
-cp server/.env.example server/.env
-cp client/.env.example client/.env
-
-# 4. Run DB migrations and seed
-cd server && npm run db:generate && npm run db:migrate && npm run db:seed
-
-# 5. Start dev servers (in separate terminals)
-cd server && npm run dev      # http://localhost:3000
-cd client && npm run dev      # http://localhost:5173
+npm run db:generate  # generate Drizzle migration files from schema changes
+npm run db:migrate   # apply pending migrations
+npm run db:seed      # seed DB with sample games/users
+npm run db:studio    # open Drizzle Studio (visual DB browser)
 ```
 
-## Key Technical Decisions
+### Client (`cd client`)
 
-| Concern | Choice | Reason |
-|---|---|---|
-| Frontend bundler | Vite 8 | Fast HMR, modern ESM |
-| CSS | Tailwind CSS v4 | Utility-first, zero config |
-| Routing | React Router v7 | Loader/action patterns, data APIs |
-| Server state | TanStack Query v5 | Caching, deduplication, optimistic updates |
-| Client state | Zustand v5 | Minimal, performant, no boilerplate |
-| HTTP client | Axios | Interceptors for JWT injection |
-| ORM | Drizzle ORM | Type-safe, PostgreSQL-first, lightweight |
-| Auth | JWT + bcryptjs | Stateless, standard, works without Redis |
-| Validation | Zod | Schema-first, shared with TypeScript types |
-| DB | PostgreSQL 16 | Relational, ACID, best for transactional data |
+```bash
+npm run dev          # Vite dev server — http://localhost:5173
+npm run build        # tsc -b && vite build
+npm run lint         # ESLint
+npm run preview      # serve production build locally
+```
+
+### Initial Setup
+
+```bash
+docker-compose up -d   # start PostgreSQL (port 5433) + pgAdmin (port 5050)
+cd server && npm install && cp .env.example .env
+cd ../client && npm install && cp .env.example .env
+cd ../server && npm run db:generate && npm run db:migrate && npm run db:seed
+```
+
+## Architecture
+
+### Request Flow
+
+1. Client API calls go through `client/src/api/client.ts` — a single Axios instance that reads `VITE_API_URL` and auto-attaches the JWT from `localStorage` via a request interceptor. A 401 response interceptor clears the token and redirects to `/login`.
+2. The server (`server/src/index.ts`) mounts routers under `/api/*`. All cart and user routes apply `requireAuth` middleware at the router level — not per-handler.
+3. Route handlers call Drizzle directly (no service layer). Errors are passed to `next(err)` and handled centrally by `errorHandler.ts`, which maps Zod validation errors and PostgreSQL error codes to appropriate HTTP responses.
+
+### Auth
+
+- JWT payload carries `{ userId, role }` (see `server/src/types/index.ts`).
+- The token is stored in both `localStorage` and Zustand's `authStore` (persisted via `zustand/middleware`). On rehydration, `isAuthenticated` is derived from presence of a token.
+- `requireAdmin` chains `requireAuth` then checks `role === "admin"`.
+
+### Client State
+
+- **TanStack Query** handles all server state (fetching, caching, invalidation).
+- **Zustand** manages two local stores: `authStore` (persisted user/token) and `cartStore` (in-memory cart items synced from API responses — not persisted).
+- `cartStore` is kept in sync manually: after API mutations, callers call `setItems`/`addItem`/`removeItem` on the store.
+
+### Database
+
+Schema lives entirely in `server/src/db/schema.ts`. Drizzle relations are defined there and used for `.query.*` calls with `with:` (relational queries). Direct SQL-style calls use `eq`, `and`, etc. from `drizzle-orm`.
+
+All PKs are UUIDs (`defaultRandom()`). Unique constraints prevent duplicate cart/wishlist/library entries at the DB level — the server also checks application-level to return meaningful errors before hitting the constraint.
+
+## Key Conventions
+
+- Server routes import types from `server/src/types/index.ts` (`AuthRequest`, `ApiResponse`, etc.).
+- All client API modules in `client/src/api/` define their own TypeScript interfaces for response shapes — they are the source of truth for frontend types, not shared with the server.
+- Game `price` and `balance` are stored as `numeric` in Postgres and returned as strings; always use `parseFloat()` before arithmetic.
+- Games are identified by `slug` in URLs and client API calls; internally the DB uses `id` (UUID).
 
 ## API Routes
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | /api/auth/register | - | Create account |
-| POST | /api/auth/login | - | Get JWT token |
+| POST | /api/auth/register | — | Create account |
+| POST | /api/auth/login | — | Get JWT token |
 | GET | /api/auth/me | JWT | Current user |
-| GET | /api/games | - | List games (paginated, filterable) |
-| GET | /api/games/featured | - | Top-rated games |
-| GET | /api/games/:slug | - | Game detail |
+| GET | /api/games | — | List games (paginated, filterable) |
+| GET | /api/games/featured | — | Top-rated games |
+| GET | /api/games/:slug | — | Game detail |
 | GET | /api/games/:slug/ownership | JWT | Owned/wishlisted status |
 | GET | /api/cart | JWT | Get cart |
 | POST | /api/cart/:gameId | JWT | Add to cart |
@@ -94,14 +100,7 @@ cd client && npm run dev      # http://localhost:5173
 | PATCH | /api/users/profile | JWT | Update profile |
 | POST | /api/users/reviews/:gameId | JWT | Review a game (must own) |
 
-## DB Schema
-
-Core tables: `users`, `games`, `game_screenshots`, `game_genres`, `game_tags`, `user_library`, `cart_items`, `wishlist_items`, `reviews`
-
-All PKs are UUIDs. Migrations live in `server/src/db/migrations/`.
-
 ## pgAdmin
 
-Access at http://localhost:5050  
-Email: `admin@steamclone.dev` | Password: `admin`  
+http://localhost:5050 — Email: `admin@steamclone.dev` / Password: `admin`  
 Connect to host `postgres`, port `5432`, user/pass `steamclone/steamclone_dev`
